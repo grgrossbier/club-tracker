@@ -4,3 +4,20 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+actix-web = "4.3"
+serde = { version = "1.0", features = ["derive"] }
+sqlx = { version = "0.6", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono"] }
+tokio = { version = "1.28", features = ["full"] }
+uuid = { version = "1.3", features = ["serde", "v4"] }
+argon2 = "0.5"
+futures = "0.3"
+
+# For password hashing
+password-hash = "0.5"
+
+# For environment variables (optional, but recommended for development)
+dotenv = "0.15"
+
+# For logging (optional, but recommended)
+env_logger = "0.10"
+log = "0.4"
