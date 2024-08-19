@@ -10,6 +10,76 @@ use argon2::{
     Argon2,
 };
 use futures::future::{ready, Ready};
+use std::future::Future;
+
+use std::pin::Pin;
+use actix_web::{
+    dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
+    Error,
+};
+use log::info;
+use serde_json::Value;
+
+pub struct Logging;
+
+impl<S, B> Transform<S, ServiceRequest> for Logging
+where
+    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
+    S::Future: 'static,
+    B: 'static,
+{
+    type Response = ServiceResponse<B>;
+    type Error = Error;
+    type InitError = ();
+    type Transform = LoggingMiddleware<S>;
+    type Future = Ready<Result<Self::Transform, Self::InitError>>;
+
+    fn new_transform(&self, service: S) -> Self::Future {
+        ready(Ok(LoggingMiddleware { service }))
+    }
+}
+
+pub struct LoggingMiddleware<S> {
+    service: S,
+}
+
+impl<S, B> Service<ServiceRequest> for LoggingMiddleware<S>
+where
+    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
+    S::Future: 'static,
+    B: 'static,
+{
+    type Response = ServiceResponse<B>;
+    type Error = Error;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
+
+    forward_ready!(service);
+
+    fn call(&self, req: ServiceRequest) -> Self::Future {
+        let method = req.method().to_string();
+        let path = req.path().to_string();
+        let query_string = req.query_string().to_string();
+        let headers = format!("{:?}", req.headers());
+
+        let fut = self.service.call(req);
+
+        Box::pin(async move {
+            let res = fut.await?;
+
+            // Log the request details
+            info!(
+                "Request: {} {} \nQuery: {} \nHeaders: {}",
+                method, path, query_string, headers
+            );
+
+            // Log the response status
+            info!("Response Status: {}", res.status());
+
+            Ok(res)
+        })
+    }
+}
+
 
 // Structures
 #[derive(Serialize, Deserialize)]
@@ -248,8 +318,24 @@ async fn get_club_by_distance(
     }
 }
 
+use env_logger::Builder;
+use std::fs::OpenOptions;
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    // Open log file in append mode
+    let file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(true)
+        .open("api.log")?;
+
+    // Initialize the logger to write to the file
+    Builder::new()
+        .target(env_logger::Target::Pipe(Box::new(file)))
+        .filter_level(log::LevelFilter::Info)
+        .init();
+
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let db_pool = PgPoolOptions::new()
         .max_connections(5)
@@ -259,6 +345,7 @@ async fn main() -> std::io::Result<()> {
 
     HttpServer::new(move || {
         App::new()
+            .wrap(Logging)  // Add this line to use the logging middleware
             .app_data(web::Data::new(AppState {
                 db: db_pool.clone(),
             }))
