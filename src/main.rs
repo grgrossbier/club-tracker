@@ -1,24 +1,33 @@
 #[macro_use]
 extern crate actix_web;
 
-use actix_web::{web, App, HttpServer, HttpResponse, Responder, FromRequest, HttpRequest, dev::Payload};
-use serde::{Deserialize, Serialize};
-use sqlx::{postgres::PgPoolOptions, Pool, Postgres};
-use uuid::Uuid;
+use actix_web::{
+    dev::Payload,
+    web,
+    App,
+    FromRequest,
+    HttpRequest,
+    HttpResponse,
+    HttpServer,
+    Responder,
+};
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
     Argon2,
 };
 use futures::future::{ready, Ready};
+use serde::{Deserialize, Serialize};
+use sqlx::{postgres::PgPoolOptions, Pool, Postgres};
 use std::future::Future;
+use uuid::Uuid;
 
-use std::pin::Pin;
 use actix_web::{
     dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
     Error,
 };
 use log::info;
 use serde_json::Value;
+use std::pin::Pin;
 
 pub struct Logging;
 
@@ -80,20 +89,19 @@ where
     }
 }
 
-
 // Structures
 #[derive(Serialize, Deserialize)]
 struct User {
-    id: Uuid,
+    id:       Uuid,
     username: String,
-    api_key: String,
+    api_key:  String,
 }
 
 #[derive(Serialize, Deserialize)]
 struct Club {
-    id: Uuid,
-    user_id: Uuid,
-    name: String,
+    id:       Uuid,
+    user_id:  Uuid,
+    name:     String,
     distance: i32,
 }
 
@@ -105,7 +113,7 @@ struct CreateUserRequest {
 
 #[derive(Deserialize)]
 struct AddClubRequest {
-    name: String,
+    name:     String,
     distance: i32,
 }
 
@@ -137,9 +145,7 @@ async fn verify_api_key(db: &Pool<Postgres>, api_key: &str) -> Result<Uuid, sqlx
     user.map(|u| u.id).ok_or(sqlx::Error::RowNotFound)
 }
 
-fn generate_api_key() -> String {
-    Uuid::new_v4().to_string()
-}
+fn generate_api_key() -> String { Uuid::new_v4().to_string() }
 
 struct ApiKey(String);
 
@@ -148,13 +154,17 @@ impl FromRequest for ApiKey {
     type Future = Ready<Result<Self, Self::Error>>;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
-        let api_key = req.headers().get("X-API-Key")
+        let api_key = req
+            .headers()
+            .get("X-API-Key")
             .and_then(|header| header.to_str().ok())
             .map(|s| s.to_string());
 
         match api_key {
             Some(key) => ready(Ok(ApiKey(key))),
-            None => ready(Err(actix_web::error::ErrorUnauthorized("API Key not provided")))
+            None => ready(Err(actix_web::error::ErrorUnauthorized(
+                "API Key not provided",
+            ))),
         }
     }
 }
@@ -168,8 +178,9 @@ async fn create_user(
     let api_key = generate_api_key();
     let argon2 = Argon2::default();
     let salt = SaltString::generate(&mut OsRng);
-    
-    let password_hash = argon2.hash_password(user_req.password.as_bytes(), &salt)
+
+    let password_hash = argon2
+        .hash_password(user_req.password.as_bytes(), &salt)
         .unwrap()
         .to_string();
 
@@ -247,10 +258,7 @@ async fn remove_club(
 }
 
 #[get("/clubs")]
-async fn get_all_clubs(
-    state: web::Data<AppState>,
-    api_key: ApiKey,
-) -> impl Responder {
+async fn get_all_clubs(state: web::Data<AppState>, api_key: ApiKey) -> impl Responder {
     match verify_api_key(&state.db, &api_key.0).await {
         Ok(user_id) => {
             match sqlx::query_as!(
@@ -345,7 +353,7 @@ async fn main() -> std::io::Result<()> {
 
     HttpServer::new(move || {
         App::new()
-            .wrap(Logging)  // Add this line to use the logging middleware
+            .wrap(Logging) // Add this line to use the logging middleware
             .app_data(web::Data::new(AppState {
                 db: db_pool.clone(),
             }))
@@ -355,7 +363,7 @@ async fn main() -> std::io::Result<()> {
                     .service(add_club)
                     .service(remove_club)
                     .service(get_all_clubs)
-                    .service(get_club_by_distance)
+                    .service(get_club_by_distance),
             )
     })
     .bind("0.0.0.0:8080")?

@@ -1,0 +1,7 @@
+max_width = 99
+tab_spaces = 4
+struct_field_align_threshold = 30
+enum_discrim_align_threshold = 30
+fn_single_line = true
+imports_layout = "HorizontalVertical"
+edition = "2018"
