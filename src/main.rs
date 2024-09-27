@@ -199,6 +199,29 @@ async fn create_user(
     let argon2 = Argon2::default();
     let salt = SaltString::generate(&mut OsRng);
 
+    // Check if the username already exists for this user
+    match sqlx::query!(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE username = $1)",
+        user_req.username,
+    )
+    .fetch_one(&state.db)
+    .await
+    {
+        Ok(row) => {
+            let exists = row.exists.unwrap_or(false);
+            if exists {
+                return HttpResponse::BadRequest().json(ErrorResponse {
+                    message: "A user by the same name already exists.".to_string(),
+                });
+            }
+        },
+        Err(_) => {
+            return HttpResponse::InternalServerError().json(ErrorResponse {
+                message: "Failed to check for existing user".to_string(),
+            });
+        }
+    }
+
     let password_hash = argon2
         .hash_password(user_req.password.as_bytes(), &salt)
         .unwrap()
