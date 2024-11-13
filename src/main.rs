@@ -27,6 +27,7 @@ use actix_web::{
 };
 use log::info;
 use serde_json::Value;
+use serde_json::json;
 use std::pin::Pin;
 
 
@@ -103,14 +104,13 @@ struct CreateUserRequest {
 }
 
 #[derive(Deserialize)]
-struct AddClubRequest {
-    name:     String, // TODO: Enforce Unique Club Names
-    distance: i32,
+struct AddClubsRequest {
+    clubs: Vec<ClubInfo>,
 }
 
 #[derive(Deserialize)]
-struct RemoveClubRequest {
-    name: String, // TODO: Remove via club name instead of UUID
+struct RemoveClubsRequest {
+    clubs: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -129,7 +129,7 @@ struct ErrorResponse {
     message: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct ClubInfo {
     name: String,
     distance: i32,
@@ -247,57 +247,94 @@ async fn create_user(
     }
 }
 
+// Updated endpoint
 #[post("/clubs")]
 async fn add_club(
     state: web::Data<AppState>,
-    club_req: web::Json<AddClubRequest>,
+    clubs_req: web::Json<AddClubsRequest>,
     api_key: ApiKey,
 ) -> impl Responder {
     match verify_api_key(&state.db, &api_key.0).await {
         Ok(user_id) => {
-            // Check if the club name already exists for this user
-            match sqlx::query!(
-                "SELECT EXISTS(SELECT 1 FROM clubs WHERE user_id = $1 AND name = $2)",
-                user_id,
-                club_req.name
-            )
-            .fetch_one(&state.db)
-            .await
-            {
-                Ok(row) => {
-                    let exists = row.exists.unwrap_or(false);
-                    if exists {
-                        return HttpResponse::BadRequest().json(ErrorResponse {
-                            message: "A club by the same name already exists in your bag.".to_string(),
+            // Start a transaction
+            let mut tx = match state.db.begin().await {
+                Ok(tx) => tx,
+                Err(_) => return HttpResponse::InternalServerError().json(ErrorResponse {
+                    message: "Failed to start database transaction".to_string(),
+                }),
+            };
+
+            let mut added_clubs = Vec::new();
+            let mut errors = Vec::new();
+
+            // Process each club
+            for club_data in &clubs_req.clubs {
+                // Check if the club name already exists for this user
+                match sqlx::query!(
+                    "SELECT EXISTS(SELECT 1 FROM clubs WHERE user_id = $1 AND name = $2)",
+                    user_id,
+                    club_data.name
+                )
+                .fetch_one(&mut *tx)
+                .await
+                {
+                    Ok(row) => {
+                        let exists = row.exists.unwrap_or(false);
+                        if exists {
+                            errors.push(format!("Club '{}' already exists in your bag", club_data.name));
+                            continue;
+                        }
+                    },
+                    Err(_) => {
+                        return HttpResponse::InternalServerError().json(ErrorResponse {
+                            message: "Failed to check for existing club".to_string(),
                         });
                     }
-                },
-                Err(_) => {
-                    return HttpResponse::InternalServerError().json(ErrorResponse {
-                        message: "Failed to check for existing club".to_string(),
-                    });
+                }
+
+                // Insert the new club
+                match sqlx::query!(
+                    "INSERT INTO clubs (user_id, name, distance) VALUES ($1, $2, $3) RETURNING id",
+                    user_id,
+                    club_data.name,
+                    club_data.distance
+                )
+                .fetch_one(&mut *tx)
+                .await
+                {
+                    Ok(club) => {
+                        added_clubs.push(Club {
+                            id: club.id,
+                            user_id,
+                            name: club_data.name.clone(),
+                            distance: club_data.distance,
+                        });
+                    },
+                    Err(_) => {
+                        errors.push(format!("Failed to add club '{}'", club_data.name));
+                    }
                 }
             }
 
-            // Insert the new club
-            match sqlx::query!(
-                "INSERT INTO clubs (user_id, name, distance) VALUES ($1, $2, $3) RETURNING id",
-                user_id,
-                club_req.name,
-                club_req.distance
-            )
-            .fetch_one(&state.db)
-            .await
-            {
-                Ok(club) => HttpResponse::Ok().json(Club {
-                    id: club.id,
-                    user_id,
-                    name: club_req.name.clone(),
-                    distance: club_req.distance,
-                }),
-                Err(_) => HttpResponse::InternalServerError().json(ErrorResponse {
-                    message: "Failed to add club".to_string(),
-                }),
+            // Commit or rollback the transaction
+            if errors.is_empty() {
+                match tx.commit().await {
+                    Ok(_) => HttpResponse::Ok().json(json!({
+                        "added_clubs": added_clubs,
+                        "count": added_clubs.len()
+                    })),
+                    Err(_) => HttpResponse::InternalServerError().json(ErrorResponse {
+                        message: "Failed to commit transaction".to_string(),
+                    }),
+                }
+            } else {
+                // Rollback on any errors
+                let _ = tx.rollback().await;
+                HttpResponse::BadRequest().json(json!({
+                    "errors": errors,
+                    "added_clubs": added_clubs,
+                    "count": added_clubs.len()
+                }))
             }
         }
         Err(_) => HttpResponse::Unauthorized().json(ErrorResponse {
@@ -309,25 +346,68 @@ async fn add_club(
 #[delete("/clubs")]
 async fn remove_club(
     state: web::Data<AppState>,
-    club_req: web::Json<RemoveClubRequest>,
+    clubs_req: web::Json<RemoveClubsRequest>,
     api_key: ApiKey,
 ) -> impl Responder {
     match verify_api_key(&state.db, &api_key.0).await {
         Ok(user_id) => {
-            match sqlx::query!(
-                "DELETE FROM clubs WHERE name = $1 AND user_id = $2",
-                club_req.name,
-                user_id
-            )
-            .execute(&state.db)
-            .await
-            {
-                Ok(result) if result.rows_affected() > 0 => HttpResponse::Ok().finish(),
-                Ok(_) => HttpResponse::NotFound().finish(),
-                Err(_) => HttpResponse::InternalServerError().finish(),
+            // Start a transaction
+            let mut tx = match state.db.begin().await {
+                Ok(tx) => tx,
+                Err(_) => return HttpResponse::InternalServerError().json(ErrorResponse {
+                    message: "Failed to start database transaction".to_string(),
+                }),
+            };
+
+            let mut removed_clubs = Vec::new();
+            let mut errors = Vec::new();
+
+            // Process each club
+            for club_name in &clubs_req.clubs {
+                match sqlx::query!(
+                    "DELETE FROM clubs WHERE name = $1 AND user_id = $2 RETURNING name",
+                    club_name,
+                    user_id
+                )
+                .fetch_optional(&mut *tx)
+                .await
+                {
+                    Ok(Some(result)) => {
+                        removed_clubs.push(result.name);
+                    },
+                    Ok(None) => {
+                        errors.push(format!("Club '{}' not found in your bag", club_name));
+                    },
+                    Err(_) => {
+                        errors.push(format!("Failed to remove club '{}'", club_name));
+                    }
+                }
+            }
+
+            // Commit or rollback the transaction
+            if errors.is_empty() {
+                match tx.commit().await {
+                    Ok(_) => HttpResponse::Ok().json(json!({
+                        "removed_clubs": removed_clubs,
+                        "count": removed_clubs.len()
+                    })),
+                    Err(_) => HttpResponse::InternalServerError().json(ErrorResponse {
+                        message: "Failed to commit transaction".to_string(),
+                    }),
+                }
+            } else {
+                // Rollback on any errors
+                let _ = tx.rollback().await;
+                HttpResponse::BadRequest().json(json!({
+                    "errors": errors,
+                    "removed_clubs": removed_clubs,
+                    "count": removed_clubs.len()
+                }))
             }
         }
-        Err(_) => HttpResponse::Unauthorized().finish(),
+        Err(_) => HttpResponse::Unauthorized().json(ErrorResponse {
+            message: "Invalid API key".to_string(),
+        }),
     }
 }
 
