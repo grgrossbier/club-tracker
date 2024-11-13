@@ -129,6 +129,12 @@ struct ErrorResponse {
     message: String,
 }
 
+#[derive(Serialize)]
+struct ClubInfo {
+    name: String,
+    distance: i32,
+}
+
 
 /////////////////////// Helper functions ///////////////////////////////////////////
 
@@ -330,8 +336,8 @@ async fn get_all_clubs(state: web::Data<AppState>, api_key: ApiKey) -> impl Resp
     match verify_api_key(&state.db, &api_key.0).await {
         Ok(user_id) => {
             match sqlx::query_as!(
-                Club,
-                "SELECT id, user_id, name, distance FROM clubs WHERE user_id = $1",
+                ClubInfo,
+                "SELECT name, distance FROM clubs WHERE user_id = $1",
                 user_id
             )
             .fetch_all(&state.db)
@@ -358,8 +364,8 @@ async fn get_club_by_distance(
             let upper_bound = target_distance + 25;
 
             match sqlx::query_as!(
-                Club,
-                "SELECT id, user_id, name, distance FROM clubs 
+                ClubInfo,
+                "SELECT name, distance FROM clubs 
                 WHERE user_id = $1 AND distance >= $2
                 ORDER BY distance ASC
                 LIMIT 1",
@@ -371,8 +377,8 @@ async fn get_club_by_distance(
             {
                 Ok(Some(club)) => {
                     let nearby_clubs = sqlx::query_as!(
-                        Club,
-                        "SELECT id, user_id, name, distance FROM clubs 
+                        ClubInfo,
+                        "SELECT name, distance FROM clubs 
                         WHERE user_id = $1 AND distance BETWEEN $2 AND $3
                         ORDER BY ABS(distance - $4)",
                         user_id,
