@@ -30,6 +30,9 @@ use serde_json::Value;
 use serde_json::json;
 use std::pin::Pin;
 
+use actix_cors::Cors;
+
+
 
 ///////////////////////////////// main() ////////////////////////////////////////////////
 
@@ -58,6 +61,12 @@ async fn main() -> std::io::Result<()> {
     HttpServer::new(move || {
         App::new()
             .wrap(Logging)
+            .wrap(
+                Cors::default()
+                    .allow_any_origin()
+                    .allow_any_method()
+                    .allow_any_header()
+            )
             .app_data(web::Data::new(AppState {
                 db: db_pool.clone(),
             }))
