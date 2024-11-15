@@ -438,7 +438,7 @@ async fn get_all_clubs(state: web::Data<AppState>, api_key: ApiKey) -> impl Resp
     }
 }
 
-#[get("/clubs/by-distance")]
+#[post("/clubs/by-distance")]
 async fn get_club_by_distance(
     state: web::Data<AppState>,
     distance_req: web::Json<GetClubByDistanceRequest>,

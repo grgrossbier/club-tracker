@@ -183,24 +183,27 @@
             }
 
             try {
-                const response = await api.get('/clubs/by-distance', {
-                    data: {
-                        distance
-                    }
+                // Using POST-like JSON structure with GET
+                const response = await api.post('/clubs/by-distance', {
+                    distance: distance
                 });
                 
                 const [bestClub, nearbyClubs] = response.data;
                 const resultDiv = document.getElementById('clubResult');
                 
-                let html = `<h3>Best Match:</h3>
-                           <p>${bestClub.name} (${bestClub.distance} yards)</p>
-                           <h3>Nearby Clubs:</h3>
-                           <ul>`;
-                
-                nearbyClubs.forEach(club => {
-                    html += `<li>${club.name} (${club.distance} yards)</li>`;
-                });
-                html += '</ul>';
+                let html = `<h3>Best Match:</h3>`;
+                if (bestClub) {  // Add null check
+                    html += `<p>${bestClub.name} (${bestClub.distance} yards)</p>
+                            <h3>Nearby Clubs:</h3>
+                            <ul>`;
+                    
+                    nearbyClubs.forEach(club => {
+                        html += `<li>${club.name} (${club.distance} yards)</li>`;
+                    });
+                    html += '</ul>';
+                } else {
+                    html += `<p>No clubs found at or above this distance</p>`;
+                }
                 
                 resultDiv.innerHTML = html;
             } catch (error) {
