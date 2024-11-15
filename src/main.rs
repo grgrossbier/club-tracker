@@ -67,7 +67,8 @@ async fn main() -> std::io::Result<()> {
                     .service(add_club)
                     .service(remove_club)
                     .service(get_all_clubs)
-                    .service(get_club_by_distance),
+                    .service(get_club_by_distance)
+                    .service(remove_all_clubs),
             )
     })
     .bind("0.0.0.0:8080")?
@@ -149,19 +150,6 @@ async fn verify_api_key(db: &Pool<Postgres>, api_key: &str) -> Result<Uuid, sqlx
     .await?
     .ok_or(sqlx::Error::RowNotFound)
 }
-
-// async fn verify_api_key(db: &Pool<Postgres>, api_key: &str) -> Result<Uuid, sqlx::Error> {
-//     // Pull a user from the (users) database and build a User{} from it.
-//     let user = sqlx::query_as!(
-//         User,
-//         "SELECT id, username, api_key FROM users WHERE api_key = $1",
-//         api_key
-//     )
-//     .fetch_optional(db)
-//     .await?;
-// 
-//     user.map(|u| u.id).ok_or(sqlx::Error::RowNotFound)
-// }
 
 fn generate_api_key() -> String { Uuid::new_v4().to_string() }
 
@@ -255,78 +243,59 @@ async fn add_club(
 ) -> impl Responder {
     match verify_api_key(&state.db, &api_key.0).await {
         Ok(user_id) => {
-            let mut added_clubs = Vec::new();
-            let mut existing_clubs = Vec::new();
+            // Extract vectors of names and distances for all clubs
+            let names: Vec<String> = clubs_req.clubs.iter().map(|c| c.name.clone()).collect();
+            let distances: Vec<i32> = clubs_req.clubs.iter().map(|c| c.distance).collect();
 
-            // First, find which clubs already exist
+            // Use UPSERT (INSERT ... ON CONFLICT DO UPDATE) for all clubs
             match sqlx::query!(
-                "SELECT name FROM clubs WHERE user_id = $1 AND name = ANY($2)",
+                "WITH changes AS (
+                    INSERT INTO clubs (user_id, name, distance)
+                    SELECT $1, unnest($2::text[]), unnest($3::integer[])
+                    ON CONFLICT (user_id, name) DO UPDATE 
+                    SET distance = EXCLUDED.distance
+                    RETURNING name, distance,
+                        CASE 
+                            WHEN xmax = 0 THEN 'insert'
+                            ELSE 'update'
+                        END as change_type
+                )
+                SELECT name, distance, change_type FROM changes",
                 user_id,
-                &clubs_req.clubs.iter().map(|c| c.name.clone()).collect() as &Vec<String>
+                &names as &[String],
+                &distances as &[i32]
             )
             .fetch_all(&state.db)
             .await
             {
-                Ok(existing) => {
-                    let existing_names: Vec<String> = existing.into_iter()
-                        .map(|r| r.name)
-                        .collect();
+                Ok(results) => {
+                    let mut added_clubs = Vec::new();
+                    let mut updated_clubs = Vec::new();
 
-                    // Filter out existing clubs and prepare new ones for insertion
-                    let new_clubs: Vec<_> = clubs_req.clubs.iter()
-                        .filter(|club| !existing_names.contains(&club.name))
-                        .collect();
+                    for row in results {
+                        let club_info = ClubInfo {
+                            name: row.name,
+                            distance: row.distance,
+                        };
 
-                    // Record existing clubs
-                    existing_clubs = clubs_req.clubs.iter()
-                        .filter(|club| existing_names.contains(&club.name))
-                        .map(|club| club.name.clone())
-                        .collect();
-
-                    // Insert new clubs in query
-                    if !new_clubs.is_empty() {
-                        // Extract vectors of names and distances
-                        let names: Vec<String> = new_clubs.iter().map(|c| c.name.clone()).collect();
-                        let distances: Vec<i32> = new_clubs.iter().map(|c| c.distance).collect();
-
-                        match sqlx::query!(
-                            "INSERT INTO clubs (user_id, name, distance)
-                             SELECT $1, unnest($2::text[]), unnest($3::integer[])
-                             RETURNING name, distance",
-                            user_id,
-                            &names as &[String],
-                            &distances as &[i32]
-                        )
-                        .fetch_all(&state.db)
-                        .await
-                        {
-                            Ok(inserted) => {
-                                for row in inserted {
-                                    added_clubs.push(ClubInfo {
-                                        name: row.name,
-                                        distance: row.distance,
-                                    });
-                                }
-                            },
-                            Err(_) => {
-                                return HttpResponse::InternalServerError().json(ErrorResponse {
-                                    message: "Failed to insert new clubs".to_string(),
-                                });
-                            }
+                        // Now we have a more explicit field name
+                        if row.change_type.unwrap() == "insert" {
+                            added_clubs.push(club_info);
+                        } else {
+                            updated_clubs.push(club_info);
                         }
                     }
 
-                    // Return success with details about what happened
                     HttpResponse::Ok().json(json!({
                         "status": "success",
                         "added_clubs": added_clubs,
-                        "existing_clubs": existing_clubs,
+                        "updated_clubs": updated_clubs,
                         "added_count": added_clubs.len(),
-                        "existing_count": existing_clubs.len()
+                        "updated_count": updated_clubs.len()
                     }))
                 },
                 Err(_) => HttpResponse::InternalServerError().json(ErrorResponse {
-                    message: "Failed to check existing clubs".to_string(),
+                    message: "Failed to insert/update clubs".to_string(),
                 }),
             }
         }
@@ -393,6 +362,55 @@ async fn remove_club(
     }
 }
 
+#[derive(Deserialize)]
+struct RemoveAllClubsRequest {
+    confirmation: String  // Must match "DELETE ALL MY CLUBS"
+}
+
+#[delete("/clubs/all")]
+async fn remove_all_clubs(
+    state: web::Data<AppState>,
+    req: web::Json<RemoveAllClubsRequest>,
+    api_key: ApiKey,
+) -> impl Responder {
+    const CONFIRMATION_TEXT: &str = "DELETE ALL MY CLUBS";
+    
+    if req.confirmation != CONFIRMATION_TEXT {
+        return HttpResponse::BadRequest().json(ErrorResponse {
+            message: format!("Must provide confirmation text: '{}'", CONFIRMATION_TEXT)
+        });
+    }
+    match verify_api_key(&state.db, &api_key.0).await {
+        Ok(user_id) => {
+            match sqlx::query!(
+                "DELETE FROM clubs WHERE user_id = $1 RETURNING name",
+                user_id
+            )
+            .fetch_all(&state.db)
+            .await
+            {
+                Ok(deleted) => {
+                    let removed_clubs: Vec<String> = deleted.into_iter()
+                        .map(|r| r.name)
+                        .collect();
+                    
+                    HttpResponse::Ok().json(json!({
+                        "status": "success",
+                        "removed_clubs": removed_clubs,
+                        "count": removed_clubs.len()
+                    }))
+                },
+                Err(_) => HttpResponse::InternalServerError().json(ErrorResponse {
+                    message: "Failed to remove clubs".to_string(),
+                })
+            }
+        }
+        Err(_) => HttpResponse::Unauthorized().json(ErrorResponse {
+            message: "Invalid API key".to_string(),
+        })
+    }
+}
+
 #[get("/clubs")]
 async fn get_all_clubs(state: web::Data<AppState>, api_key: ApiKey) -> impl Responder {
     match verify_api_key(&state.db, &api_key.0).await {
@@ -422,8 +440,8 @@ async fn get_club_by_distance(
     match verify_api_key(&state.db, &api_key.0).await {
         Ok(user_id) => {
             let target_distance = distance_req.distance;
-            let lower_bound = target_distance - 25;
-            let upper_bound = target_distance + 25;
+            let lower_bound = target_distance - 20;
+            let upper_bound = target_distance + 30;
 
             match sqlx::query_as!(
                 ClubInfo,
@@ -442,11 +460,10 @@ async fn get_club_by_distance(
                         ClubInfo,
                         "SELECT name, distance FROM clubs 
                         WHERE user_id = $1 AND distance BETWEEN $2 AND $3
-                        ORDER BY ABS(distance - $4)",
+                        ORDER BY distance DESC",
                         user_id,
                         lower_bound,
                         upper_bound,
-                        target_distance
                     )
                     .fetch_all(&state.db)
                     .await
