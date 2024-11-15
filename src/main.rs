@@ -421,7 +421,10 @@ async fn get_all_clubs(state: web::Data<AppState>, api_key: ApiKey) -> impl Resp
         Ok(user_id) => {
             match sqlx::query_as!(
                 ClubInfo,
-                "SELECT name, distance FROM clubs WHERE user_id = $1",
+                "SELECT name, distance FROM clubs 
+                WHERE user_id = $1
+                ORDER BY distance ASC
+                ",
                 user_id
             )
             .fetch_all(&state.db)
@@ -464,7 +467,7 @@ async fn get_club_by_distance(
                         ClubInfo,
                         "SELECT name, distance FROM clubs 
                         WHERE user_id = $1 AND distance BETWEEN $2 AND $3
-                        ORDER BY distance DESC",
+                        ORDER BY distance ASC",
                         user_id,
                         lower_bound,
                         upper_bound,
