@@ -29,8 +29,7 @@ use log::info;
 use serde_json::Value;
 use serde_json::json;
 use std::pin::Pin;
-
-use actix_cors::Cors;
+use actix_files::Files;
 
 
 
@@ -38,14 +37,13 @@ use actix_cors::Cors;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    // Open log file in append mode
+    // Your existing logger setup remains the same
     let file = OpenOptions::new()
         .create(true)
         .write(true)
         .append(true)
         .open("api.log")?;
 
-    // Initialize the logger to write to the file
     Builder::new()
         .target(env_logger::Target::Pipe(Box::new(file)))
         .filter_level(log::LevelFilter::Info)
@@ -61,17 +59,12 @@ async fn main() -> std::io::Result<()> {
     HttpServer::new(move || {
         App::new()
             .wrap(Logging)
-            .wrap(
-                Cors::default()
-                    .allow_any_origin()
-                    .allow_any_method()
-                    .allow_any_header()
-            )
             .app_data(web::Data::new(AppState {
                 db: db_pool.clone(),
             }))
+            // Serve API routes under /api prefix
             .service(
-                web::scope("")
+                web::scope("/api")
                     .service(create_user)
                     .service(add_club)
                     .service(remove_club)
@@ -79,6 +72,8 @@ async fn main() -> std::io::Result<()> {
                     .service(get_club_by_distance)
                     .service(remove_all_clubs),
             )
+            // Serve static files
+            .service(Files::new("/", "./static").index_file("index.html"))
     })
     .bind("0.0.0.0:8080")?
     .run()

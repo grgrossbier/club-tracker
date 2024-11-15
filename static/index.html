@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Golf Club Distance Manager</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/axios/1.6.2/axios.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f0f8f0;
+        }
+        .card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .button:hover {
+            background-color: #45a049;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .error {
+            color: red;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>Authentication</h2>
+        <div>
+            <input type="text" id="apiKey" placeholder="Enter API Key">
+            <button class="button" onclick="setApiKey()">Set API Key</button>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Add New Club</h2>
+        <div>
+            <input type="text" id="clubName" placeholder="Club Name">
+            <input type="number" id="clubDistance" placeholder="Distance (yards)">
+            <button class="button" onclick="addClub()">Add Club</button>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Find Club by Distance</h2>
+        <div>
+            <input type="number" id="targetDistance" placeholder="Target Distance">
+            <button class="button" onclick="findClubByDistance()">Find Club</button>
+            <div id="clubResult"></div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Your Clubs</h2>
+        <button class="button" onclick="loadClubs()">Refresh Clubs</button>
+        <table id="clubsTable">
+            <thead>
+                <tr>
+                    <th>Club</th>
+                    <th>Distance</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody id="clubsList">
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        let currentApiKey = '';
+        // Now we just use relative paths since everything is served from the same origin
+        const API_BASE_URL = '/api';
+
+        function setApiKey() {
+            currentApiKey = document.getElementById('apiKey').value;
+            loadClubs(); // Test the API key by loading clubs
+        }
+
+        const api = axios.create({
+            baseURL: API_BASE_URL,
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+
+        api.interceptors.request.use(config => {
+            if (currentApiKey) {
+                config.headers['X-API-Key'] = currentApiKey;
+            }
+            return config;
+        });
+
+        async function loadClubs() {
+            try {
+                const response = await api.get('/clubs');
+                const clubsList = document.getElementById('clubsList');
+                clubsList.innerHTML = '';
+                
+                response.data.forEach(club => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${club.name}</td>
+                        <td>${club.distance} yards</td>
+                        <td><button class="button" onclick="removeClub('${club.name}')">Remove</button></td>
+                    `;
+                    clubsList.appendChild(row);
+                });
+            } catch (error) {
+                alert('Error loading clubs: ' + error.response?.data?.message || error.message);
+            }
+        }
+
+        async function addClub() {
+            const name = document.getElementById('clubName').value;
+            const distance = parseInt(document.getElementById('clubDistance').value);
+            
+            if (!name || !distance) {
+                alert('Please enter both club name and distance');
+                return;
+            }
+
+            try {
+                await api.post('/clubs', {
+                    clubs: [{
+                        name,
+                        distance
+                    }]
+                });
+                document.getElementById('clubName').value = '';
+                document.getElementById('clubDistance').value = '';
+                loadClubs();
+            } catch (error) {
+                alert('Error adding club: ' + error.response?.data?.message || error.message);
+            }
+        }
+
+        async function removeClub(clubName) {
+            try {
+                await api.delete('/clubs', {
+                    data: {
+                        clubs: [clubName]
+                    }
+                });
+                loadClubs();
+            } catch (error) {
+                alert('Error removing club: ' + error.response?.data?.message || error.message);
+            }
+        }
+
+        async function findClubByDistance() {
+            const distance = parseInt(document.getElementById('targetDistance').value);
+            if (!distance) {
+                alert('Please enter a target distance');
+                return;
+            }
+
+            try {
+                const response = await api.get('/clubs/by-distance', {
+                    data: {
+                        distance
+                    }
+                });
+                
+                const [bestClub, nearbyClubs] = response.data;
+                const resultDiv = document.getElementById('clubResult');
+                
+                let html = `<h3>Best Match:</h3>
+                           <p>${bestClub.name} (${bestClub.distance} yards)</p>
+                           <h3>Nearby Clubs:</h3>
+                           <ul>`;
+                
+                nearbyClubs.forEach(club => {
+                    html += `<li>${club.name} (${club.distance} yards)</li>`;
+                });
+                html += '</ul>';
+                
+                resultDiv.innerHTML = html;
+            } catch (error) {
+                alert('Error finding club: ' + error.response?.data?.message || error.message);
+            }
+        }
+    </script>
+</body>
+</html>
