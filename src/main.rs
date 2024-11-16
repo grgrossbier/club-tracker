@@ -37,7 +37,6 @@ use actix_files::Files;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    // Your existing logger setup remains the same
     let file = OpenOptions::new()
         .create(true)
         .write(true)
@@ -49,14 +48,21 @@ async fn main() -> std::io::Result<()> {
         .filter_level(log::LevelFilter::Info)
         .init();
 
+    println!("Starting up...");  // Add debug prints
+    
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    println!("Got database URL");  // Add debug prints
+    
     let db_pool = PgPoolOptions::new()
         .max_connections(5)
         .connect(&database_url)
         .await
         .expect("Failed to create pool");
+    
+    println!("Connected to database");  // Add debug prints
 
     HttpServer::new(move || {
+        println!("Setting up server...");  // Add debug prints
         App::new()
             .wrap(Logging)
             .app_data(web::Data::new(AppState {
